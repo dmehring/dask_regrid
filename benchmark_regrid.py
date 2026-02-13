@@ -161,7 +161,7 @@ def main() -> None:
     )
     p.add_argument(
         "--regridder",
-        choices=["scipy", "xesmf"],
+        choices=["xarray", "xesmf"],
         default="xesmf",
         help="Regridding backend to use.",
     )
