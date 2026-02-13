@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+*.egg-info/
+.DS_Store
+
+# Zarr data
+*.zarr
+
+# Temporary files
+/tmp/
+*.log

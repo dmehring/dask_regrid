@@ -1,0 +1,23 @@
+[project]
+name = "dask_regrid"
+version = "0.1.0"
+description = "Regrid 3D xarray DataArrays along two dimensions with Dask parallelization along the third."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "dask[array]>=2023.1.0",
+    "xarray>=2023.1.0",
+    "numpy>=1.21",
+    "scipy>=1.9.0",
+    "zarr",
+    "xesmf",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["*"]
