@@ -59,7 +59,11 @@ The initial goal was to understand and optimize the parallel performance of the 
 
 1.  **User Request:** Confirm numerical identity/closeness of outputs from `scipy` and `xESMF`.
 2.  **Implementation:** Created `validate_regridders.py` script. It loads data, regrids with both backends, computes results, and uses `xarray.testing.assert_allclose`.
-3.  **Validation Outcome:** The outputs from `xarray.interp` and `xESMF` were found to be **numerically identical** (maximum absolute and relative discrepancies of `0.00e+00`), confirming that the faster `xESMF` backend produces the same results as the `xarray` implementation for this use case.
+3.  **Validation Outcome:** A nuanced picture emerged.
+    *   For simple test cases (e.g., integer-factor downscaling), the outputs from `xarray.interp` and `xESMF` were found to be **numerically identical**.
+    *   However, for a more complex test with a non-integer grid ratio (200x400 -> 123x276), the outputs were **not close** and failed the `xr.testing.assert_allclose` check (with `atol=1e-5`).
+    *   Further analysis at the point of the largest absolute discrepancy (3.49) revealed a **fractional difference of 227.68%**, with the two methods even producing values with opposite signs.
+    *   This demonstrates a fundamental algorithmic difference between the two backends when handling arbitrary, unaligned grids. The choice of regridder is therefore not just a matter of performance but also of numerical methodology.
 
 ## Final Performance Picture
 
