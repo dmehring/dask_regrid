@@ -19,6 +19,138 @@ import xarray as xr
 from regrid_3d import regrid_2d_planes
 
 
+def _as_text(x: Any) -> str:
+    return str(x).strip()
+
+
+def _select_variable(ds: xr.Dataset, requested: str | None) -> str:
+    if requested:
+        if requested not in ds.data_vars:
+            raise ValueError(
+                f"Variable {requested!r} not found in dataset data vars: {list(ds.data_vars)}"
+            )
+        return requested
+    if "SKY" in ds.data_vars:
+        return "SKY"
+    if len(ds.data_vars) == 1:
+        return next(iter(ds.data_vars))
+    raise ValueError(
+        "Multiple data variables found. Pass --variable explicitly. "
+        f"Available: {list(ds.data_vars)}"
+    )
+
+
+def _infer_spatial_dims(da: xr.DataArray) -> tuple[str, str]:
+    lower_dims = {d.lower(): d for d in da.dims}
+    for a, b in (("l", "m"), ("ra", "dec"), ("lat", "lon")):
+        if a in lower_dims and b in lower_dims:
+            return lower_dims[a], lower_dims[b]
+    raise ValueError(
+        "Could not auto-detect spatial dims. Pass --dim-a and --dim-b explicitly. "
+        f"Data dims: {da.dims}"
+    )
+
+
+def _detect_quantity_mode(
+    ds: xr.Dataset,
+    da: xr.DataArray,
+    requested_mode: str,
+) -> str:
+    if requested_mode != "auto":
+        return requested_mode
+
+    unit_candidates = []
+    for key in ("units", "unit", "bunit"):
+        if key in da.attrs:
+            unit_candidates.append(_as_text(da.attrs[key]).lower())
+    for key in ("units", "unit", "bunit"):
+        if key in ds.attrs:
+            unit_candidates.append(_as_text(ds.attrs[key]).lower())
+
+    joined = " ".join(unit_candidates)
+    if "jy/beam" in joined or "jy beam-1" in joined:
+        return "jy_per_beam"
+    if "jy/pixel" in joined or "jy pix-1" in joined:
+        return "jy_per_pixel"
+    return "generic"
+
+
+def _collect_schema_hints(ds: xr.Dataset, da: xr.DataArray) -> dict[str, Any]:
+    out: dict[str, Any] = {"dataset_attrs": {}, "data_var_attrs": {}}
+    for k, v in ds.attrs.items():
+        kl = str(k).lower()
+        if "schema" in kl or "xradio" in kl:
+            out["dataset_attrs"][str(k)] = _as_text(v)
+    for k, v in da.attrs.items():
+        kl = str(k).lower()
+        if "schema" in kl or "xradio" in kl or k in ("units", "unit", "bunit"):
+            out["data_var_attrs"][str(k)] = _as_text(v)
+    out["coord_attrs"] = {}
+    for cname, c in da.coords.items():
+        keyvals: dict[str, str] = {}
+        for k, v in c.attrs.items():
+            kl = str(k).lower()
+            if (
+                "schema" in kl
+                or "xradio" in kl
+                or k in ("units", "unit", "ctype", "axis", "frame", "name")
+            ):
+                keyvals[str(k)] = _as_text(v)
+        if keyvals:
+            out["coord_attrs"][str(cname)] = keyvals
+    return out
+
+
+def _resolve_beam_metadata(
+    ds: xr.Dataset,
+    da: xr.DataArray,
+    quantity_mode: str,
+    beam_major_arcsec: float | None,
+    beam_minor_arcsec: float | None,
+    beam_pa_deg: float | None,
+) -> dict[str, float | None]:
+    major = beam_major_arcsec
+    minor = beam_minor_arcsec
+    pa = beam_pa_deg
+
+    # Best-effort extraction from attrs if CLI did not provide values.
+    if major is None:
+        for key in ("beam_major_arcsec", "bmaj_arcsec", "beam_major"):
+            if key in da.attrs:
+                major = float(da.attrs[key])
+                break
+            if key in ds.attrs:
+                major = float(ds.attrs[key])
+                break
+    if minor is None:
+        for key in ("beam_minor_arcsec", "bmin_arcsec", "beam_minor"):
+            if key in da.attrs:
+                minor = float(da.attrs[key])
+                break
+            if key in ds.attrs:
+                minor = float(ds.attrs[key])
+                break
+    if pa is None:
+        for key in ("beam_pa_deg", "bpa_deg", "beam_pa"):
+            if key in da.attrs:
+                pa = float(da.attrs[key])
+                break
+            if key in ds.attrs:
+                pa = float(ds.attrs[key])
+                break
+
+    if quantity_mode == "jy_per_beam":
+        if major is None or minor is None:
+            raise ValueError(
+                "Beam metadata required for Jy/beam workflows. "
+                "Pass --beam-major-arcsec/--beam-minor-arcsec or provide matching attrs."
+            )
+        if major <= 0 or minor <= 0:
+            raise ValueError("Beam major/minor must be positive.")
+
+    return {"major_arcsec": major, "minor_arcsec": minor, "pa_deg": pa}
+
+
 def _infer_slice_dim(da: xr.DataArray, dim_a: str, dim_b: str) -> str | None:
     for dim in da.dims:
         if dim not in (dim_a, dim_b):
@@ -63,19 +195,6 @@ def _run_backend(
     method: str,
     fill_value: float | None,
 ) -> xr.DataArray:
-    if backend == "xesmf" and (dim_a != "lat" or dim_b != "lon"):
-        da_in = da.rename({dim_a: "lat", dim_b: "lon"})
-        out = regrid_2d_planes(
-            da_in,
-            dim_a="lat",
-            dim_b="lon",
-            new_coord_a=new_coord_a,
-            new_coord_b=new_coord_b,
-            regridder_name=backend,
-            method=method,
-            fill_value=fill_value,
-        )
-        return out.rename({"lat": dim_a, "lon": dim_b})
     return regrid_2d_planes(
         da,
         dim_a=dim_a,
@@ -268,12 +387,17 @@ def main() -> None:
         description="Run correctness checks for regridding and write JSON report."
     )
     p.add_argument("--input-zarr", type=str, required=True, help="Input Zarr store path.")
-    p.add_argument("--variable", type=str, default="temperature", help="Variable name in Zarr.")
+    p.add_argument(
+        "--variable",
+        type=str,
+        default=None,
+        help="Variable name in Zarr. If omitted, prefers SKY then single data var.",
+    )
     p.add_argument(
         "--quantity-mode",
-        choices=["jy_per_pixel", "jy_per_beam", "generic"],
-        default="generic",
-        help="Physical interpretation of pixel values; controls correctness checks.",
+        choices=["auto", "jy_per_pixel", "jy_per_beam", "generic"],
+        default="auto",
+        help="Physical interpretation of pixel values; auto infers from attrs/units.",
     )
     p.add_argument(
         "--beam-major-arcsec",
@@ -298,8 +422,8 @@ def main() -> None:
         action="store_true",
         help="Also enforce integrated flux check in jy_per_beam mode (disabled by default).",
     )
-    p.add_argument("--dim-a", type=str, default="lat", help="First spatial dimension.")
-    p.add_argument("--dim-b", type=str, default="lon", help="Second spatial dimension.")
+    p.add_argument("--dim-a", type=str, default=None, help="First spatial dimension.")
+    p.add_argument("--dim-b", type=str, default=None, help="Second spatial dimension.")
     p.add_argument(
         "--slice-dim",
         type=str,
@@ -361,34 +485,47 @@ def main() -> None:
     )
     args = p.parse_args()
 
-    if args.quantity_mode == "jy_per_beam":
-        if args.beam_major_arcsec is None or args.beam_minor_arcsec is None:
-            raise ValueError(
-                "--beam-major-arcsec and --beam-minor-arcsec are required for quantity-mode=jy_per_beam."
-            )
-        if args.beam_major_arcsec <= 0 or args.beam_minor_arcsec <= 0:
-            raise ValueError("Beam major/minor must be positive.")
+    ds = xr.open_zarr(args.input_zarr)
+    var_name = _select_variable(ds, args.variable)
+    da = ds[var_name]
 
-    da = xr.open_zarr(args.input_zarr)[args.variable]
-    if args.dim_a not in da.dims or args.dim_b not in da.dims:
+    if args.dim_a is not None and args.dim_b is not None:
+        dim_a, dim_b = args.dim_a, args.dim_b
+    elif args.dim_a is None and args.dim_b is None:
+        dim_a, dim_b = _infer_spatial_dims(da)
+    else:
+        raise ValueError("Pass both --dim-a and --dim-b, or omit both for auto-detection.")
+
+    if dim_a not in da.dims or dim_b not in da.dims:
         raise ValueError(
-            f"Spatial dimensions not found. dims={da.dims}, expected {args.dim_a!r}/{args.dim_b!r}"
+            f"Spatial dimensions not found. dims={da.dims}, expected {dim_a!r}/{dim_b!r}"
         )
 
-    slice_dim = args.slice_dim or _infer_slice_dim(da, args.dim_a, args.dim_b)
+    quantity_mode = _detect_quantity_mode(ds, da, args.quantity_mode)
+    beam_metadata = _resolve_beam_metadata(
+        ds=ds,
+        da=da,
+        quantity_mode=quantity_mode,
+        beam_major_arcsec=args.beam_major_arcsec,
+        beam_minor_arcsec=args.beam_minor_arcsec,
+        beam_pa_deg=args.beam_pa_deg,
+    )
+    schema_hints = _collect_schema_hints(ds, da)
+
+    slice_dim = args.slice_dim or _infer_slice_dim(da, dim_a, dim_b)
     da_sub = _subset_data(da, slice_dim=slice_dim, max_slices=args.max_slices)
     new_a, new_b = _build_target_coords(
         da_sub,
-        dim_a=args.dim_a,
-        dim_b=args.dim_b,
+        dim_a=dim_a,
+        dim_b=dim_b,
         n_a_new=args.n_a_new,
         n_b_new=args.n_b_new,
     )
 
     ref = _run_backend(
         da_sub,
-        dim_a=args.dim_a,
-        dim_b=args.dim_b,
+        dim_a=dim_a,
+        dim_b=dim_b,
         new_coord_a=new_a,
         new_coord_b=new_b,
         backend=args.backend_ref,
@@ -397,8 +534,8 @@ def main() -> None:
     ).compute()
     cand = _run_backend(
         da_sub,
-        dim_a=args.dim_a,
-        dim_b=args.dim_b,
+        dim_a=dim_a,
+        dim_b=dim_b,
         new_coord_a=new_a,
         new_coord_b=new_b,
         backend=args.backend_cand,
@@ -406,7 +543,7 @@ def main() -> None:
         fill_value=args.fill_value,
     ).compute()
 
-    metrics = _compute_metrics(ref, cand, dim_a=args.dim_a, dim_b=args.dim_b, eps=args.eps)
+    metrics = _compute_metrics(ref, cand, dim_a=dim_a, dim_b=dim_b, eps=args.eps)
     thresholds = {
         "integrated_flux_rel_error_max": args.thr_integrated_flux_rel_max,
         "peak_flux_rel_error_max": args.thr_peak_flux_rel_max,
@@ -416,7 +553,7 @@ def main() -> None:
     verdict = _evaluate_thresholds_by_mode(
         metrics=metrics,
         thresholds=thresholds,
-        quantity_mode=args.quantity_mode,
+        quantity_mode=quantity_mode,
         enable_integrated_check_for_jy_per_beam=args.enable_integrated_check_for_jy_per_beam,
     )
 
@@ -424,10 +561,10 @@ def main() -> None:
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "config": {
             "input_zarr": args.input_zarr,
-            "variable": args.variable,
-            "quantity_mode": args.quantity_mode,
-            "dim_a": args.dim_a,
-            "dim_b": args.dim_b,
+            "variable": var_name,
+            "quantity_mode": quantity_mode,
+            "dim_a": dim_a,
+            "dim_b": dim_b,
             "slice_dim": slice_dim,
             "max_slices": args.max_slices,
             "backend_ref": args.backend_ref,
@@ -438,15 +575,12 @@ def main() -> None:
             "fill_value": None if np.isnan(args.fill_value) else args.fill_value,
             "eps": args.eps,
             "integrated_check_enabled": (
-                args.quantity_mode != "jy_per_beam"
+                quantity_mode != "jy_per_beam"
                 or args.enable_integrated_check_for_jy_per_beam
             ),
-            "beam_metadata": {
-                "major_arcsec": args.beam_major_arcsec,
-                "minor_arcsec": args.beam_minor_arcsec,
-                "pa_deg": args.beam_pa_deg,
-            },
+            "beam_metadata": beam_metadata,
         },
+        "schema_hints": schema_hints,
         "thresholds": thresholds,
         "metrics": metrics,
         "verdict": verdict,

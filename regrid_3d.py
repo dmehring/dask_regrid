@@ -77,20 +77,47 @@ def regrid_2d_planes(
             da, dim_a, dim_b, new_coord_a, new_coord_b, method, fill_value
         )
     elif regridder_name == "xesmf":
-        return _regrid_2d_planes_xesmf(da, new_coord_a, new_coord_b, method)
+        return _regrid_2d_planes_xesmf(
+            da,
+            new_coord_a,
+            new_coord_b,
+            method,
+            dim_a=dim_a,
+            dim_b=dim_b,
+        )
     else:
         raise ValueError(f"Unknown regridder_name: {regridder_name!r}")
 
 
 def _regrid_2d_planes_xesmf(
-    da: xr.DataArray, new_coord_a: np.ndarray, new_coord_b: np.ndarray, method: str
+    da: xr.DataArray,
+    new_coord_a: np.ndarray,
+    new_coord_b: np.ndarray,
+    method: str,
+    dim_a: str = "lat",
+    dim_b: str = "lon",
 ) -> xr.DataArray:
     """Regrid using xESMF."""
     if method == "linear":
         method = "bilinear"  # xESMF uses 'bilinear' for linear interpolation
+
+    # xESMF expects canonical horizontal names ('lat', 'lon'). Keep this internal
+    # so callers can use domain-specific names like (l, m).
+    rename_map: dict[str, str] = {}
+    if dim_a != "lat":
+        rename_map[dim_a] = "lat"
+    if dim_b != "lon":
+        rename_map[dim_b] = "lon"
+
+    da_in = da.rename(rename_map) if rename_map else da
     ds_out = xr.Dataset(coords={"lat": new_coord_a, "lon": new_coord_b})
-    regridder = xe.Regridder(da, ds_out, method=method)
-    return regridder(da)
+    regridder = xe.Regridder(da_in, ds_out, method=method)
+    out = regridder(da_in)
+
+    if rename_map:
+        inv_rename_map = {v: k for k, v in rename_map.items()}
+        out = out.rename(inv_rename_map)
+    return out
 
 
 def _regrid_2d_planes_xarray(
