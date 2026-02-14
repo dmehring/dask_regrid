@@ -77,3 +77,54 @@ Here's a comparison of the key regridding performance metrics on the large Zarr 
 | `xarray`          | `distributed` | 58.63    | 2.70x                   |
 
 This session successfully identified and implemented significant performance improvements, introduced a more powerful and flexible benchmarking setup, and verified the correctness of the new, faster `xESMF` regridding option.
+
+## Session Addendum: XRADIO Correctness Workflow and Test Infrastructure
+
+**Timestamp:** 2026-02-14 18:40:39 UTC  
+**Facilitation Note:** The following additions/changes were implemented with Codex assistance.
+
+### Scope of Additions in This Session
+
+1. **Repository and tooling setup for XRADIO-driven validation**
+    * Cloned `casangi/xradio` into the local workspace for reference and API usage.
+    * Installed runtime dependencies required for XRADIO image workflows and plotting (`toolviper`, `astropy`, `s3fs`, `casaconfig`, `casatools`, `matplotlib`, `pytest`).
+    * Resolved Zarr write compatibility by switching from `zarr 3.x` to `zarr<3` in the active environment, which restored reliable `to_zarr` behavior for generated test images.
+
+2. **Scientific-correctness planning and execution tooling**
+    * Added `radio_astro_correctness_plan.md` with radio-astronomy-focused correctness criteria (units/quantity modes, WCS/geometry checks, mask handling, beam considerations, pass/fail metrics, provenance).
+    * Added and iteratively improved `run_correctness_checks.py`:
+        * Backend comparison with quantitative metrics (integrated flux error, peak error, centroid shift, RMS residual, mask disagreement).
+        * Quantity modes (`jy_per_pixel`, `jy_per_beam`, `generic`, plus `auto` inference).
+        * Beam metadata enforcement for `jy_per_beam`.
+        * Auto-detection of variable and spatial dims (including `l/m`, `ra/dec`, `lat/lon`).
+        * Report provenance capture including schema-like metadata hints.
+
+3. **XRADIO image generation and visualization utilities**
+    * Implemented XRADIO factory-based image generation utility and moved it to:
+      `tests/util/generate_xradio_test_images.py`.
+    * Generated test fixtures under `xradio_test_images/` (point source, two-source blend, extended Gaussian, flat-gradient field, edge structure), each written as Zarr and indexed in a manifest.
+    * Implemented plotting utility (moved to `tests/util/plot_xradio_image.py`) to visualize `SKY` slices from Zarr fixtures with CLI controls for variable/dim/slice selection.
+
+4. **Regridding backend refactor to remove hardcoded spatial names**
+    * Updated `regrid_3d.py` so the xESMF path now respects function parameters `dim_a`/`dim_b` rather than relying on hardcoded `lat/lon`.
+    * Preserved backward-compatible defaults (`lat/lon`) internally while allowing domain-specific dimensions (`l/m`) at call sites.
+    * Updated dependent call paths to remove external rename workarounds where no longer needed (notably in `run_correctness_checks.py` and test helpers).
+
+5. **Point-source correctness tests with environment-gated xESMF coverage**
+    * Added `tests/test_point_source_correctness.py` with explicit scientific invariants and inline rationale comments:
+        * fixture sanity checks,
+        * identity-grid invariants,
+        * resample-grid centroid/non-negativity checks.
+    * Added detailed assert failure messages to speed diagnosis when invariants fail.
+    * Added optional xESMF tests guarded by:
+        * `RUN_XESMF_TESTS=1`, and
+        * successful `xesmf` import.
+    * Added `pytest.ini` marker registration for `xesmf` tests.
+    * Documented at top-of-file:
+        * how to run default and xESMF tests,
+        * why xESMF can fail in restricted environments (MPI/UCX socket/interface initialization),
+        * exact shell commands used during development.
+
+6. **Documentation and cleanup**
+    * Corrected stale script references that still mentioned a removed `scipy` backend in active user-facing messages.
+    * Reorganized utility script locations under `tests/util/` and removed redundant generator script variant from project root.
