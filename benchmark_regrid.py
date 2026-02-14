@@ -13,9 +13,9 @@ Schedulers:
 Use --scheduler to run one, or "all" (default) to compare all three.
 
 To see threads clearly win, use:  --demo-threads
-That preset uses: enough levels to keep workers busy, moderate 2D size so each
-slice is CPU-bound (SciPy releases GIL), and chunk_level=1 so process
-serialization cost is high. Overrides --levels, --lat, --lon, --lat-new, --lon-new.
+That preset uses: enough levels to keep workers busy, moderate 2D size for
+CPU-heavy interpolation work, and chunk_level=1 so process serialization cost is
+high. Overrides --levels, --lat, --lon, --lat-new, --lon-new.
 """
 
 from __future__ import annotations
@@ -252,4 +252,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

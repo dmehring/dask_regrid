@@ -1,5 +1,5 @@
 """
-Validate that the 'scipy' and 'xesmf' regridders produce similar results.
+Validate that the 'xarray' and 'xesmf' regridders produce similar results.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from regrid_3d import regrid_2d_planes
 
 def main() -> None:
     p = argparse.ArgumentParser(
-        description="Validate that scipy and xesmf regridders produce close results."
+        description="Validate that xarray and xesmf regridders produce close results."
     )
     p.add_argument(
         "--input-zarr",
