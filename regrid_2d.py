@@ -8,7 +8,7 @@ Concept:
   to parallelize over that dimension.
 
 Usage:
-    from regrid_3d import regrid_2d_planes, make_example_3d
+    from regrid_2d import regrid_2d_planes, make_example_3d
 
     da = make_example_3d()
     da_new = regrid_2d_planes(

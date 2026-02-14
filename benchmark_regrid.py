@@ -28,7 +28,7 @@ from pathlib import Path
 import numpy as np
 import xarray as xr
 
-from regrid_3d import make_example_3d, regrid_2d_planes
+from regrid_2d import make_example_3d, regrid_2d_planes
 
 
 def _time_compute(

@@ -16,7 +16,7 @@ from typing import Any
 import numpy as np
 import xarray as xr
 
-from regrid_3d import regrid_2d_planes
+from regrid_2d import regrid_2d_planes
 
 
 def _as_text(x: Any) -> str:

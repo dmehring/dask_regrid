@@ -26,7 +26,7 @@ RUN_XESMF_TESTS=1 python -m pytest -q tests/test_point_source_correctness.py -m 
 # direct backend probe used to inspect xesmf behavior
 python - <<'PY'
 import numpy as np, xarray as xr
-from regrid_3d import regrid_2d_planes
+from regrid_2d import regrid_2d_planes
 src = xr.open_zarr('xradio_test_images/point_source_center_jy_per_beam.zarr')['SKY'].isel(time=0, polarization=0)
 src2 = src.rename({'l': 'lat', 'm': 'lon'})
 for n in [64, 40, 80]:
@@ -47,7 +47,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from regrid_3d import regrid_2d_planes
+from regrid_2d import regrid_2d_planes
 
 
 FIXTURE_PATH = Path("xradio_test_images/point_source_center_jy_per_beam.zarr")

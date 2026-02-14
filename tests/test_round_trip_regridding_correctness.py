@@ -25,7 +25,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from regrid_3d import regrid_2d_planes
+from regrid_2d import regrid_2d_planes
 
 
 JYBEAM_FIXTURE = Path("xradio_test_images/point_source_center_jy_per_beam.zarr")
@@ -212,4 +212,3 @@ def test_round_trip_jy_per_pixel_xesmf_integrated_flux_stability(n_mid: int) -> 
         f"xESMF round-trip Jy/pixel centroid drift too large; n_mid={n_mid}, "
         f"centroid_px=({cxl:.6f}, {cxm:.6f})"
     )
-

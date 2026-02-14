@@ -8,7 +8,7 @@ import argparse
 from pathlib import Path
 import sys
 
-from regrid_3d import make_example_3d
+from regrid_2d import make_example_3d
 
 
 def main() -> None:

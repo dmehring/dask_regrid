@@ -26,7 +26,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from regrid_3d import regrid_2d_planes
+from regrid_2d import regrid_2d_planes
 
 
 JYPIX_FIXTURE_PATH = Path("xradio_test_images/point_source_center_jy_per_pixel.zarr")
