@@ -3,11 +3,11 @@ Point-source correctness checks for regridding backends.
 
 How to run:
   - Default (xarray-only + xesmf skipped):
-    python -m pytest -q tests/test_point_source_correctness.py
+    python -m pytest -q tests/test_point_source_jy_per_beam_correctness.py
   - xesmf-only (explicit opt-in):
-    RUN_XESMF_TESTS=1 python -m pytest -q tests/test_point_source_correctness.py -m xesmf
+    RUN_XESMF_TESTS=1 python -m pytest -q tests/test_point_source_jy_per_beam_correctness.py -m xesmf
   - all tests including xesmf:
-    RUN_XESMF_TESTS=1 python -m pytest -q tests/test_point_source_correctness.py
+    RUN_XESMF_TESTS=1 python -m pytest -q tests/test_point_source_jy_per_beam_correctness.py
 
 Why xesmf tests may not run:
   - xesmf/ESMF can initialize MPI/UCX internals that open/probe sockets and interfaces.
@@ -18,10 +18,10 @@ Why xesmf tests may not run:
 Shell commands used during development in this repo:
 ```bash
 # xarray-only suite
-python -m pytest -q tests/test_point_source_correctness.py
+python -m pytest -q tests/test_point_source_jy_per_beam_correctness.py
 
 # opt-in xesmf suite
-RUN_XESMF_TESTS=1 python -m pytest -q tests/test_point_source_correctness.py -m xesmf
+RUN_XESMF_TESTS=1 python -m pytest -q tests/test_point_source_jy_per_beam_correctness.py -m xesmf
 
 # direct backend probe used to inspect xesmf behavior
 python - <<'PY'
@@ -92,6 +92,18 @@ def _regrid_backend(
         regridder_name=backend,
         method="linear",
     ).compute()
+
+
+def _round_trip(src: xr.DataArray, *, backend: str, n_mid: int) -> xr.DataArray:
+    new_l = np.linspace(float(src["l"].min()), float(src["l"].max()), n_mid)
+    new_m = np.linspace(float(src["m"].min()), float(src["m"].max()), n_mid)
+    mid = _regrid_backend(src, backend=backend, new_a=new_l, new_b=new_m)
+    return _regrid_backend(
+        mid,
+        backend=backend,
+        new_a=src["l"].values,
+        new_b=src["m"].values,
+    )
 
 
 def _centroid_in_pixel_units(arr2d: np.ndarray, coord_a: np.ndarray, coord_b: np.ndarray) -> tuple[float, float]:
@@ -279,4 +291,53 @@ def test_xesmf_resampled_regrid_keeps_source_centered_and_nonnegative(n_new: int
     assert abs(cy_px) <= 0.5, (
         f"xESMF resampled regrid (n_new={n_new}) shifted centroid too far in dim m; "
         f"cy_px={cy_px:.6f}, limit=0.5"
+    )
+
+
+@pytest.mark.parametrize("n_mid", [40, 80])
+def test_round_trip_jy_per_beam_xarray_stability(n_mid: int) -> None:
+    ds = _require_fixture()
+    src = _source_plane(ds)
+    rt = _round_trip(src, backend="xarray", n_mid=n_mid)
+
+    a = src.isel(frequency=0).values
+    b = rt.isel(frequency=0).values
+    peak_ratio = float(np.nanmax(b) / (np.nanmax(a) + 1e-12))
+    cxl, cxm = _centroid_in_pixel_units(b, rt["l"].values, rt["m"].values)
+
+    assert peak_ratio >= 0.25, (
+        f"Round-trip Jy/beam peak dropped too much; n_mid={n_mid}, peak_ratio={peak_ratio:.6f}"
+    )
+    assert np.nanmin(b) >= 0.0, (
+        f"Round-trip Jy/beam introduced negative values; n_mid={n_mid}, min={float(np.nanmin(b)):.12g}"
+    )
+    assert abs(cxl) <= 0.30 and abs(cxm) <= 0.30, (
+        f"Round-trip Jy/beam centroid drift too large; n_mid={n_mid}, centroid_px=({cxl:.6f}, {cxm:.6f})"
+    )
+
+
+@pytest.mark.xesmf
+@pytest.mark.parametrize("n_mid", [40, 80])
+def test_round_trip_jy_per_beam_xesmf_stability(n_mid: int) -> None:
+    ok, reason = _can_run_xesmf_tests()
+    if not ok:
+        pytest.skip(reason)
+
+    ds = _require_fixture()
+    src = _source_plane(ds)
+    rt = _round_trip(src, backend="xesmf", n_mid=n_mid)
+
+    a = src.isel(frequency=0).values
+    b = rt.isel(frequency=0).values
+    peak_ratio = float(np.nanmax(b) / (np.nanmax(a) + 1e-12))
+    cxl, cxm = _centroid_in_pixel_units(b, rt["l"].values, rt["m"].values)
+
+    assert peak_ratio >= 0.25, (
+        f"xESMF round-trip Jy/beam peak dropped too much; n_mid={n_mid}, peak_ratio={peak_ratio:.6f}"
+    )
+    assert np.nanmin(b) >= 0.0, (
+        f"xESMF round-trip Jy/beam introduced negative values; n_mid={n_mid}, min={float(np.nanmin(b)):.12g}"
+    )
+    assert abs(cxl) <= 0.30 and abs(cxm) <= 0.30, (
+        f"xESMF round-trip Jy/beam centroid drift too large; n_mid={n_mid}, centroid_px=({cxl:.6f}, {cxm:.6f})"
     )

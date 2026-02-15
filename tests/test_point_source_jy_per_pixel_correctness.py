@@ -82,6 +82,18 @@ def _regrid_backend(
     ).compute()
 
 
+def _round_trip(src: xr.DataArray, *, backend: str, n_mid: int) -> xr.DataArray:
+    new_l = np.linspace(float(src["l"].min()), float(src["l"].max()), n_mid)
+    new_m = np.linspace(float(src["m"].min()), float(src["m"].max()), n_mid)
+    mid = _regrid_backend(src, backend=backend, new_a=new_l, new_b=new_m)
+    return _regrid_backend(
+        mid,
+        backend=backend,
+        new_a=src["l"].values,
+        new_b=src["m"].values,
+    )
+
+
 def _pixel_area(coord_a: np.ndarray, coord_b: np.ndarray) -> float:
     da = max(float(np.nanmedian(np.abs(np.diff(coord_a)))), 1e-12)
     db = max(float(np.nanmedian(np.abs(np.diff(coord_b)))), 1e-12)
@@ -266,4 +278,53 @@ def test_xesmf_jy_per_pixel_resampled_regrid_flux_and_centroid_stability(
     assert abs(cy_px) <= 0.5, (
         f"xESMF resampled regrid (n_new={n_new}) shifted centroid too far in dim m; "
         f"cy_px={cy_px:.6f}, limit=0.5"
+    )
+
+
+@pytest.mark.parametrize("n_mid", [40, 80])
+def test_round_trip_jy_per_pixel_xarray_integrated_flux_stability(n_mid: int) -> None:
+    ds = _load_jy_per_pixel_fixture()
+    src = _source_plane(ds)
+    rt = _round_trip(src, backend="xarray", n_mid=n_mid)
+
+    a = src.isel(frequency=0).values
+    b = rt.isel(frequency=0).values
+    flux_ratio = float(np.nansum(b) / (np.nansum(a) + 1e-12))
+    cxl, cxm = _centroid_in_pixel_units(b, rt["l"].values, rt["m"].values)
+
+    assert 0.70 <= flux_ratio <= 1.30, (
+        f"Round-trip Jy/pixel integrated flux ratio out of bounds; n_mid={n_mid}, flux_ratio={flux_ratio:.6f}"
+    )
+    assert np.nanmin(b) >= 0.0, (
+        f"Round-trip Jy/pixel introduced negative values; n_mid={n_mid}, min={float(np.nanmin(b)):.12g}"
+    )
+    assert abs(cxl) <= 0.30 and abs(cxm) <= 0.30, (
+        f"Round-trip Jy/pixel centroid drift too large; n_mid={n_mid}, centroid_px=({cxl:.6f}, {cxm:.6f})"
+    )
+
+
+@pytest.mark.xesmf
+@pytest.mark.parametrize("n_mid", [40, 80])
+def test_round_trip_jy_per_pixel_xesmf_integrated_flux_stability(n_mid: int) -> None:
+    ok, reason = _can_run_xesmf_tests()
+    if not ok:
+        pytest.skip(reason)
+
+    ds = _load_jy_per_pixel_fixture()
+    src = _source_plane(ds)
+    rt = _round_trip(src, backend="xesmf", n_mid=n_mid)
+
+    a = src.isel(frequency=0).values
+    b = rt.isel(frequency=0).values
+    flux_ratio = float(np.nansum(b) / (np.nansum(a) + 1e-12))
+    cxl, cxm = _centroid_in_pixel_units(b, rt["l"].values, rt["m"].values)
+
+    assert 0.70 <= flux_ratio <= 1.30, (
+        f"xESMF round-trip Jy/pixel integrated flux ratio out of bounds; n_mid={n_mid}, flux_ratio={flux_ratio:.6f}"
+    )
+    assert np.nanmin(b) >= 0.0, (
+        f"xESMF round-trip Jy/pixel introduced negative values; n_mid={n_mid}, min={float(np.nanmin(b)):.12g}"
+    )
+    assert abs(cxl) <= 0.30 and abs(cxm) <= 0.30, (
+        f"xESMF round-trip Jy/pixel centroid drift too large; n_mid={n_mid}, centroid_px=({cxl:.6f}, {cxm:.6f})"
     )
