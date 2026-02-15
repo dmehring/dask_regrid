@@ -128,3 +128,97 @@ This session successfully identified and implemented significant performance imp
 6. **Documentation and cleanup**
     * Corrected stale script references that still mentioned a removed `scipy` backend in active user-facing messages.
     * Reorganized utility script locations under `tests/util/` and removed redundant generator script variant from project root.
+
+## Session Addendum 2: Test Refactor + Performance Detour
+
+**Timestamp:** 2026-02-15 10:58:48 UTC  
+**Facilitation Note:** The following additions/changes were implemented with Codex assistance.
+
+### 1) Regridding Module Rename and Import Cleanup
+
+1. Renamed core module from `regrid_3d.py` to `regrid_2d.py` to better match actual behavior (2D spatial regridding across arbitrary extra dimensions).
+2. Updated imports/usages across scripts and tests:
+    * `benchmark_regrid.py`
+    * `generate_zarr_data.py`
+    * `run_correctness_checks.py`
+    * `validate_regridders.py`
+    * all point-source and round-trip test modules
+3. Updated usage text inside the regridding module to reference `regrid_2d`.
+4. Verified by running compile checks and test suite subsets after rename.
+
+### 2) Point-Source Test Structure Refactor
+
+1. Renamed `tests/test_point_source_correctness.py` to:
+    * `tests/test_point_source_jy_per_beam_correctness.py`
+2. Added and expanded:
+    * `tests/test_point_source_jy_per_pixel_correctness.py`
+3. Added `xESMF` test sections in Jy/pixel module with the same opt-in gating used in Jy/beam:
+    * gated by `RUN_XESMF_TESTS=1`
+    * skip-safe when `xesmf` import/runtime is unavailable
+4. Added explicit top-of-file run instructions and rationale for default skip behavior in both files.
+5. Added detailed assertion failure messages throughout to make failures diagnostically useful.
+
+### 3) Round-Trip Tests Moved into Source-Type Modules
+
+1. Refactored round-trip tests from standalone module into source-type-specific modules:
+    * round-trip Jy/beam checks now live in `tests/test_point_source_jy_per_beam_correctness.py`
+    * round-trip Jy/pixel checks now live in `tests/test_point_source_jy_per_pixel_correctness.py`
+2. Removed standalone file:
+    * `tests/test_round_trip_regridding_correctness.py` (deleted from disk and git tracking)
+3. Re-ran modified files with:
+    * default test path (xarray + xesmf skipped)
+    * opt-in xesmf path (`RUN_XESMF_TESTS=1`)
+   and confirmed passing runs.
+
+### 4) Extended Gaussian Test Coverage Split by Quantity Semantics
+
+1. Renamed the existing extended-Gaussian Jy/pixel test module to:
+    * `tests/test_extended_gaussian_jy_per_pix_correctness.py`
+2. Added a dedicated Jy/beam extended-Gaussian module:
+    * `tests/test_extended_gaussian_jy_per_beam_correctness.py`
+3. Jy/pixel module emphasizes:
+    * area-weighted integrated flux stability
+    * peak behavior and round-trip RMS constraints
+4. Jy/beam module emphasizes:
+    * peak fidelity
+    * centroid stability
+    * round-trip RMS constraints
+    * beam metadata presence/consistency
+5. Both modules include opt-in xesmf coverage with default skip behavior.
+
+### 5) Performance Detour: XRADIO Image Serial vs Parallel Scaling
+
+Benchmarked regridding of XRADIO-generated `extended_gaussian_jy_per_pixel` images using `xarray` backend and Dask schedulers (`sync` vs `threads`) to compare serial and parallel performance.
+
+#### Case A: Shape `(1, 256, 1, 1024, 1024)`
+
+1. Dataset: `/tmp/xradio_perf_big/extended_gaussian_jy_per_pixel.zarr`
+2. Regrid target: `1024x1024 -> 640x640`
+3. Results (3 runs/config after warmup, representative means):
+    * `sync`: ~13.5 s
+    * `threads(2)`: ~9.9 s  (~1.37x)
+    * `threads(4)`: ~6.9 s  (~1.96x)
+    * `threads(8)`: ~6.8 s  (~1.99x)
+    * `threads(16)`: ~7.1 s (~1.90x)
+4. Reproducibility rerun showed near-identical behavior and same optimal region around `threads(8)`.
+
+#### Case B: Shape `(1, 512, 1, 1024, 1024)`
+
+1. Dataset: `/tmp/xradio_perf_512ch/extended_gaussian_jy_per_pixel.zarr`
+2. Same target and method as Case A.
+3. Results (2 runs/config after warmup):
+    * `sync`: ~32.2 s
+    * `threads(2)`: ~18.7 s (~1.72x)
+    * `threads(4)`: ~12.4 s (~2.60x)
+    * `threads(8)`: ~9.7 s  (~3.30x)
+    * `threads(16)`: ~12.7 s (~2.53x)
+4. Observed trend: increasing frequency-plane task count improved parallel scaling substantially; best throughput still occurred near `threads(8)` for this machine/workload.
+
+### 6) Git/Repo State Outcomes
+
+1. Multiple commits were created and pushed to `main` covering:
+    * regridding module rename and import updates
+    * point-source test split/refactor
+    * extended Gaussian Jy/pixel and Jy/beam tests
+    * round-trip test migration/removal
+2. Local untracked directories (`xradio/`, `xradio_test_images/`) were intentionally left uncommitted.
