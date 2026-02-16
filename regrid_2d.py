@@ -1,18 +1,19 @@
 """
-Regrid a 3D xarray.DataArray along two dimensions in parallel over the third.
+Regrid an n-dimensional xarray.DataArray along two named spatial dimensions.
 
 Concept:
-- DataArray has dims like (dim_independent, dim_a, dim_b), e.g. (level, lat, lon).
+- DataArray can have any number of dimensions >= 2.
 - We regrid (dim_a, dim_b) onto a new 2D grid.
-- Each slice along dim_independent is regridded independently, so we use Dask
-  to parallelize over that dimension.
+- All other dimensions are preserved.
+- If the DataArray is Dask-backed, parallelism is controlled by chunking and the
+  active Dask scheduler across dimensions other than `dim_a` and `dim_b`.
 
 Usage:
     from regrid_2d import regrid_2d_planes, make_example_3d
 
-    da = make_example_3d()
+    xda = make_example_3d()
     da_new = regrid_2d_planes(
-        da,
+        xda,
         dim_a="lat", dim_b="lon",
         new_coord_a=np.linspace(-90, 90, 180),
         new_coord_b=np.linspace(0, 360, 360),
@@ -30,7 +31,7 @@ import dask.array as da
 
 
 def regrid_2d_planes(
-    da: xr.DataArray,
+    xda: xr.DataArray,
     dim_a: str,
     dim_b: str,
     new_coord_a: np.ndarray,
@@ -41,21 +42,23 @@ def regrid_2d_planes(
     chunk_size: int | None = None,
 ) -> xr.DataArray:
     """
-    Regrid a 3D DataArray along two dimensions, in parallel over the third.
+    Regrid an n-dimensional DataArray along two named dimensions.
 
-    The dimension that is not dim_a or dim_b is the "independent" dimension
-    (e.g. level, time). Each slice along that dimension is regridded
-    independently; Dask chunks along that dimension and runs the regrid in
-    parallel.
+    The dimensions `dim_a` and `dim_b` are regridded. Any remaining dimensions
+    (e.g. time, frequency, polarization) are preserved and broadcast over.
+    For Dask-backed arrays, parallel execution is determined by chunking and the
+    chosen Dask scheduler across dimensions other than `dim_a` and `dim_b`.
 
     Parameters
     ----------
-    da : xr.DataArray
-        Must have exactly three dimensions: dim_independent, dim_a, dim_b.
+    xda : xr.DataArray
+        Input array with dimensions that include `dim_a` and `dim_b`.
     dim_a, dim_b : str
         Names of the two dimensions to regrid (e.g. "lat", "lon").
     new_coord_a, new_coord_b : array-like
-        1D arrays of target coordinates.
+        1D coordinate values for the output grid along `dim_a` and `dim_b`.
+        These vectors define where samples are evaluated in the regridded
+        result, i.e. the new axis coordinates used by interpolation/regridding.
     regridder_name : {'xarray', 'xesmf'}
         Name of the regridding backend to use.
     method : str
@@ -63,22 +66,22 @@ def regrid_2d_planes(
     fill_value : float or None
         Value for points outside the source grid. (Only used for 'xarray' backend).
     chunk_size : int | None
-        Chunk size along the independent dimension. (Only used for 'xarray' backend).
+        Reserved for future chunk-control behavior. Currently unused.
 
     Returns
     -------
     xr.DataArray
-        Same as da but with dim_a and dim_b replaced by the new grids.
-        If da was lazy (Dask-backed), the result is lazy and can be
+        Same as `xda` but with dim_a and dim_b replaced by the new grids.
+        If `xda` was lazy (Dask-backed), the result is lazy and can be
         computed with .compute().
     """
     if regridder_name == "xarray":
         return _regrid_2d_planes_xarray(
-            da, dim_a, dim_b, new_coord_a, new_coord_b, method, fill_value
+            xda, dim_a, dim_b, new_coord_a, new_coord_b, method, fill_value
         )
     elif regridder_name == "xesmf":
         return _regrid_2d_planes_xesmf(
-            da,
+            xda,
             new_coord_a,
             new_coord_b,
             method,
@@ -90,7 +93,7 @@ def regrid_2d_planes(
 
 
 def _regrid_2d_planes_xesmf(
-    da: xr.DataArray,
+    xda: xr.DataArray,
     new_coord_a: np.ndarray,
     new_coord_b: np.ndarray,
     method: str,
@@ -109,7 +112,7 @@ def _regrid_2d_planes_xesmf(
     if dim_b != "lon":
         rename_map[dim_b] = "lon"
 
-    da_in = da.rename(rename_map) if rename_map else da
+    da_in = xda.rename(rename_map) if rename_map else xda
     ds_out = xr.Dataset(coords={"lat": new_coord_a, "lon": new_coord_b})
     regridder = xe.Regridder(da_in, ds_out, method=method)
     out = regridder(da_in)
@@ -121,7 +124,7 @@ def _regrid_2d_planes_xesmf(
 
 
 def _regrid_2d_planes_xarray(
-    da: xr.DataArray,
+    xda: xr.DataArray,
     dim_a: str,
     dim_b: str,
     new_coord_a: np.ndarray,
@@ -130,7 +133,7 @@ def _regrid_2d_planes_xarray(
     fill_value: float | None,
 ) -> xr.DataArray:
     """Regridding implementation using xarray.interp."""
-    return da.interp(
+    return xda.interp(
         coords={dim_a: new_coord_a, dim_b: new_coord_b},
         method=method,
         kwargs={"fill_value": fill_value},
@@ -171,16 +174,16 @@ def make_example_3d(
 def main() -> None:
     """Run a small example: create 3D data, regrid, and print shapes."""
     print("Creating example 3D DataArray (level=4, lat=90, lon=180)...")
-    da = make_example_3d(n_level=4, n_lat=90, n_lon=180, chunk_level=1)
-    print(f"  Shape: {da.shape}, dims: {da.dims}")
-    print(f"  Chunks: {da.chunks}")
+    xda = make_example_3d(n_level=4, n_lat=90, n_lon=180, chunk_level=1)
+    print(f"  Shape: {xda.shape}, dims: {xda.dims}")
+    print(f"  Chunks: {xda.chunks}")
 
     # Regrid to a coarser lat/lon grid
     new_lat = np.linspace(-90, 90, 45)
     new_lon = np.linspace(0, 360, 90)
     print("\nRegridding to lat=45, lon=90 (parallel over level)...")
     da_new = regrid_2d_planes(
-        da,
+        xda,
         dim_a="lat",
         dim_b="lon",
         new_coord_a=new_lat,
