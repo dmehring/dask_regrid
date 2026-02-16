@@ -113,37 +113,72 @@ def _resolve_beam_metadata(
     minor = beam_minor_arcsec
     pa = beam_pa_deg
 
-    # Best-effort extraction from attrs if CLI did not provide values.
-    if major is None:
-        for key in ("beam_major_arcsec", "bmaj_arcsec", "beam_major"):
-            if key in da.attrs:
-                major = float(da.attrs[key])
-                break
-            if key in ds.attrs:
-                major = float(ds.attrs[key])
-                break
-    if minor is None:
-        for key in ("beam_minor_arcsec", "bmin_arcsec", "beam_minor"):
-            if key in da.attrs:
-                minor = float(da.attrs[key])
-                break
-            if key in ds.attrs:
-                minor = float(ds.attrs[key])
-                break
-    if pa is None:
-        for key in ("beam_pa_deg", "bpa_deg", "beam_pa"):
-            if key in da.attrs:
-                pa = float(da.attrs[key])
-                break
-            if key in ds.attrs:
-                pa = float(ds.attrs[key])
-                break
+    def _angular_to_arcsec(v: float, unit: str) -> float:
+        u = unit.strip().lower()
+        if u in {"arcsec", "arcsecond", "arcseconds"}:
+            return v
+        if u in {"deg", "degree", "degrees"}:
+            return v * 3600.0
+        if u in {"rad", "radian", "radians"}:
+            return np.rad2deg(v) * 3600.0
+        raise ValueError(f"Unsupported beam angular unit for major/minor: {unit!r}")
+
+    def _angular_to_deg(v: float, unit: str) -> float:
+        u = unit.strip().lower()
+        if u in {"deg", "degree", "degrees"}:
+            return v
+        if u in {"rad", "radian", "radians"}:
+            return np.rad2deg(v)
+        if u in {"arcsec", "arcsecond", "arcseconds"}:
+            return v / 3600.0
+        raise ValueError(f"Unsupported beam angular unit for PA: {unit!r}")
+
+    # XRADIO schema path: BEAM_FIT_PARAMS with beam_params_label=["major","minor","pa"].
+    need_schema_lookup = major is None or minor is None or pa is None
+    if need_schema_lookup and "BEAM_FIT_PARAMS" in ds:
+        beam = ds["BEAM_FIT_PARAMS"]
+        if "beam_params_label" not in beam.dims:
+            raise ValueError(
+                "BEAM_FIT_PARAMS is present but missing required dim 'beam_params_label'."
+            )
+        labels = [str(x).strip().lower() for x in beam["beam_params_label"].values.tolist()]
+        idx_map = {label: i for i, label in enumerate(labels)}
+        missing = [k for k in ("major", "minor", "pa") if k not in idx_map]
+        if missing:
+            raise ValueError(
+                "BEAM_FIT_PARAMS must include beam_params_label entries "
+                f"['major','minor','pa']; missing={missing}, got={labels}"
+            )
+
+        unit = str(
+            beam["beam_params_label"].attrs.get(
+                "units", beam.attrs.get("units", "")
+            )
+        ).strip()
+        if not unit:
+            raise ValueError(
+                "Beam metadata missing units: set beam_params_label.attrs['units'] "
+                "to an angular unit (for example 'rad', 'deg', or 'arcsec')."
+            )
+
+        # Representative beam (for report thresholds) from first (time, freq, pol) entry.
+        selector = {
+            d: 0 for d in beam.dims if d != "beam_params_label"
+        }
+        beam0 = beam.isel(selector).values.astype(float)
+        if major is None:
+            major = float(_angular_to_arcsec(float(beam0[idx_map["major"]]), unit))
+        if minor is None:
+            minor = float(_angular_to_arcsec(float(beam0[idx_map["minor"]]), unit))
+        if pa is None:
+            pa = float(_angular_to_deg(float(beam0[idx_map["pa"]]), unit))
 
     if quantity_mode == "jy_per_beam":
         if major is None or minor is None:
             raise ValueError(
                 "Beam metadata required for Jy/beam workflows. "
-                "Pass --beam-major-arcsec/--beam-minor-arcsec or provide matching attrs."
+                "Pass --beam-major-arcsec/--beam-minor-arcsec or provide "
+                "BEAM_FIT_PARAMS with beam_params_label=['major','minor','pa']."
             )
         if major <= 0 or minor <= 0:
             raise ValueError("Beam major/minor must be positive.")

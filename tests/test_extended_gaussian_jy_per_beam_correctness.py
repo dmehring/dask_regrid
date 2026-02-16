@@ -41,19 +41,45 @@ def _can_run_xesmf_tests() -> tuple[bool, str]:
     return True, ""
 
 
-def _source() -> xr.DataArray:
+def _source_dataset() -> xr.Dataset:
     if JYBEAM_FIXTURE.exists():
-        ds = xr.open_zarr(JYBEAM_FIXTURE)
-        return ds["SKY"].isel(time=0, polarization=0)
+        return xr.open_zarr(JYBEAM_FIXTURE)
     if not JYPIX_FIXTURE.exists():
         pytest.skip(f"Missing fixtures: {JYBEAM_FIXTURE} and {JYPIX_FIXTURE}")
 
     # Fallback: reuse Gaussian pixels but assign Jy/beam semantics and beam metadata.
     ds = xr.open_zarr(JYPIX_FIXTURE).copy(deep=True)
     ds["SKY"].attrs["units"] = "Jy/beam"
-    ds["SKY"].attrs["beam_major_arcsec"] = 2.0
-    ds["SKY"].attrs["beam_minor_arcsec"] = 1.6
-    ds["SKY"].attrs["beam_pa_deg"] = 20.0
+    beam_vals_rad = np.array(
+        [np.deg2rad(2.0 / 3600.0), np.deg2rad(1.6 / 3600.0), np.deg2rad(20.0)],
+        dtype=np.float64,
+    )
+    beam = np.broadcast_to(
+        beam_vals_rad[None, None, None, :],
+        (
+            ds.sizes["time"],
+            ds.sizes["frequency"],
+            ds.sizes["polarization"],
+            3,
+        ),
+    ).copy()
+    ds["BEAM_FIT_PARAMS"] = xr.DataArray(
+        beam,
+        dims=("time", "frequency", "polarization", "beam_params_label"),
+        coords={
+            "time": ds.coords["time"],
+            "frequency": ds.coords["frequency"],
+            "polarization": ds.coords["polarization"],
+            "beam_params_label": np.array(["major", "minor", "pa"], dtype=object),
+        },
+    )
+    ds["beam_params_label"].attrs["units"] = "rad"
+    ds["BEAM_FIT_PARAMS"].attrs["units"] = "rad"
+    return ds
+
+
+def _source() -> xr.DataArray:
+    ds = _source_dataset()
     return ds["SKY"].isel(time=0, polarization=0)
 
 
@@ -144,14 +170,28 @@ def _run_round_trip_checks(backend: str, n_mid: int) -> None:
 
 
 def test_extended_gaussian_jy_per_beam_fixture_sanity() -> None:
-    src = _source()
+    ds = _source_dataset()
+    src = ds["SKY"].isel(time=0, polarization=0)
     a = src.isel(frequency=0).values
 
     assert src.attrs.get("units") == "Jy/beam", (
         f"Expected units Jy/beam, got {src.attrs.get('units')!r}"
     )
-    assert src.attrs.get("beam_major_arcsec") is not None, "Missing beam_major_arcsec metadata"
-    assert src.attrs.get("beam_minor_arcsec") is not None, "Missing beam_minor_arcsec metadata"
+    # Beam metadata should be carried in BEAM_FIT_PARAMS, not SKY attrs.
+    assert "BEAM_FIT_PARAMS" in ds.data_vars, (
+        "Expected BEAM_FIT_PARAMS variable for Jy/beam fixture, but it is missing"
+    )
+    beam = ds["BEAM_FIT_PARAMS"]
+    assert tuple(beam.dims) == ("time", "frequency", "polarization", "beam_params_label"), (
+        f"Unexpected BEAM_FIT_PARAMS dims: {beam.dims}"
+    )
+    labels = [str(x) for x in beam["beam_params_label"].values.tolist()]
+    assert labels == ["major", "minor", "pa"], (
+        f"Unexpected beam_params_label values: {labels}"
+    )
+    assert "units" in beam["beam_params_label"].attrs, (
+        "Expected beam_params_label coordinate to define angular units"
+    )
     assert np.isfinite(a).any(), "Fixture has no finite pixels"
     assert float(np.nanmax(a)) > 0.0, "Fixture peak must be positive"
     assert float(np.nanmin(a)) >= 0.0, "Fixture should be non-negative"
@@ -195,4 +235,3 @@ def test_extended_gaussian_jy_per_beam_round_trip_xesmf(n_mid: int) -> None:
     if not ok:
         pytest.skip(reason)
     _run_round_trip_checks("xesmf", n_mid=n_mid)
-

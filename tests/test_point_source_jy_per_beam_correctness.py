@@ -133,6 +133,20 @@ def test_point_source_fixture_sanity() -> None:
         f"Expected SKY units 'Jy/beam' for point-source fixture, "
         f"got {ds['SKY'].attrs.get('units')!r}"
     )
+    assert "BEAM_FIT_PARAMS" in ds.data_vars, (
+        "Expected BEAM_FIT_PARAMS variable for Jy/beam fixture, but it is missing"
+    )
+    beam = ds["BEAM_FIT_PARAMS"]
+    assert tuple(beam.dims) == ("time", "frequency", "polarization", "beam_params_label"), (
+        f"Unexpected BEAM_FIT_PARAMS dims: {beam.dims}"
+    )
+    labels = [str(x) for x in beam["beam_params_label"].values.tolist()]
+    assert labels == ["major", "minor", "pa"], (
+        f"Unexpected beam_params_label values: {labels}"
+    )
+    assert "units" in beam["beam_params_label"].attrs, (
+        "Expected beam_params_label coordinate to define angular units"
+    )
     # Source construction sets one unit-flux pixel at center.
     assert float(np.nansum(sky)) == pytest.approx(1.0), (
         f"Fixture total flux should be 1.0, got {float(np.nansum(sky)):.12g}"

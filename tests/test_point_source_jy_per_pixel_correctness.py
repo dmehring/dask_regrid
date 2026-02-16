@@ -44,8 +44,8 @@ def _load_jy_per_pixel_fixture() -> xr.Dataset:
     # Fallback for current fixture set: reuse point-source values but override unit semantics.
     ds = xr.open_zarr(FALLBACK_FIXTURE_PATH).copy(deep=True)
     ds["SKY"].attrs["units"] = "Jy/pixel"
-    for k in ("beam_major_arcsec", "beam_minor_arcsec", "beam_pa_deg"):
-        ds["SKY"].attrs.pop(k, None)
+    if "BEAM_FIT_PARAMS" in ds:
+        ds = ds.drop_vars("BEAM_FIT_PARAMS")
     return ds
 
 

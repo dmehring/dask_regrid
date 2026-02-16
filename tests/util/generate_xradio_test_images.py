@@ -81,13 +81,6 @@ def _attach_sky_and_flag(
     coords = {d: xds.coords[d] for d in dims}
     xds["SKY"] = xr.DataArray(sky_vals, dims=dims, coords=coords)
     xds["SKY"].attrs.update({"image_type": "Intensity", "type": "sky", "units": units})
-    if beam_major_arcsec is not None:
-        xds["SKY"].attrs["beam_major_arcsec"] = float(beam_major_arcsec)
-    if beam_minor_arcsec is not None:
-        xds["SKY"].attrs["beam_minor_arcsec"] = float(beam_minor_arcsec)
-    if beam_pa_deg is not None:
-        xds["SKY"].attrs["beam_pa_deg"] = float(beam_pa_deg)
-
     flag = np.zeros_like(sky_vals, dtype=bool)
     # In xradio FLAG_SKY, True means masked/invalid
     flag[..., : max(2, xds.sizes["l"] // 20), : max(2, xds.sizes["m"] // 20)] = True
@@ -97,6 +90,45 @@ def _attach_sky_and_flag(
 
     xds.attrs["data_groups"] = {"base": {"sky": "SKY", "flag": "FLAG_SKY"}}
     xds.attrs["type"] = "image_dataset"
+
+    if (
+        beam_major_arcsec is not None
+        and beam_minor_arcsec is not None
+        and beam_pa_deg is not None
+    ):
+        # XRADIO schema: one beam triplet per (time, frequency, polarization),
+        # encoded as BEAM_FIT_PARAMS[..., beam_params_label=["major","minor","pa"]].
+        # Use a single angular unit on beam_params_label as requested.
+        beam_labels = np.array(["major", "minor", "pa"], dtype=object)
+        beam_vals = np.array(
+            [
+                np.deg2rad(float(beam_major_arcsec) / 3600.0),
+                np.deg2rad(float(beam_minor_arcsec) / 3600.0),
+                np.deg2rad(float(beam_pa_deg)),
+            ],
+            dtype=np.float64,
+        )
+        beam = np.broadcast_to(
+            beam_vals[None, None, None, :],
+            (
+                xds.sizes["time"],
+                xds.sizes["frequency"],
+                xds.sizes["polarization"],
+                3,
+            ),
+        ).copy()
+        xds["BEAM_FIT_PARAMS"] = xr.DataArray(
+            beam,
+            dims=("time", "frequency", "polarization", "beam_params_label"),
+            coords={
+                "time": xds.coords["time"],
+                "frequency": xds.coords["frequency"],
+                "polarization": xds.coords["polarization"],
+                "beam_params_label": beam_labels,
+            },
+        )
+        xds["beam_params_label"].attrs["units"] = "rad"
+        xds["BEAM_FIT_PARAMS"].attrs["units"] = "rad"
     return xds
 
 
