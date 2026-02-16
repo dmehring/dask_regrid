@@ -33,6 +33,27 @@ def _gaussian_2d(
     return amp * np.exp(-0.5 * rr)
 
 
+def _gaussian_2d_rotated(
+    l_vals: np.ndarray,
+    m_vals: np.ndarray,
+    amp: float,
+    l0: float,
+    m0: float,
+    sigma_major: float,
+    sigma_minor: float,
+    pa_rad: float,
+) -> np.ndarray:
+    ll, mm = np.meshgrid(l_vals, m_vals, indexing="ij")
+    dl = ll - l0
+    dm = mm - m0
+    c = np.cos(pa_rad)
+    s = np.sin(pa_rad)
+    u = c * dl + s * dm
+    v = -s * dl + c * dm
+    rr = (u / sigma_major) ** 2 + (v / sigma_minor) ** 2
+    return amp * np.exp(-0.5 * rr)
+
+
 def _build_template(
     n_l: int, n_m: int, n_chan: int, n_pol: int, n_time: int, fov_arcsec: float
 ) -> xr.Dataset:
@@ -132,20 +153,45 @@ def _attach_sky_and_flag(
     return xds
 
 
-def _case_point_source(xds: xr.Dataset) -> tuple[xr.Dataset, str]:
+def _case_point_source_jy_per_beam(xds: xr.Dataset) -> tuple[xr.Dataset, str]:
     l = xds.coords["l"].values
     m = xds.coords["m"].values
-    base = np.zeros((l.size, m.size), dtype=np.float64)
-    base[l.size // 2, m.size // 2] = 1.0
+    # Keep beam broader than pixel scale so the source is visibly beam-shaped.
+    beam_major_arcsec = 30.0
+    beam_minor_arcsec = 24.0
+    beam_pa_deg = 35.0
+    fwhm_major_rad = np.deg2rad(beam_major_arcsec / 3600.0)
+    fwhm_minor_rad = np.deg2rad(beam_minor_arcsec / 3600.0)
+    sigma_major = fwhm_major_rad / (2.0 * np.sqrt(2.0 * np.log(2.0)))
+    sigma_minor = fwhm_minor_rad / (2.0 * np.sqrt(2.0 * np.log(2.0)))
+    base = _gaussian_2d_rotated(
+        l,
+        m,
+        amp=1.0,
+        l0=l[l.size // 2],
+        m0=m[m.size // 2],
+        sigma_major=sigma_major,
+        sigma_minor=sigma_minor,
+        pa_rad=np.deg2rad(beam_pa_deg),
+    )
     sky = _broadcast_to_sky(base, xds)
     return _attach_sky_and_flag(
         xds,
         sky,
         units="Jy/beam",
-        beam_major_arcsec=2.1,
-        beam_minor_arcsec=1.7,
-        beam_pa_deg=35.0,
+        beam_major_arcsec=beam_major_arcsec,
+        beam_minor_arcsec=beam_minor_arcsec,
+        beam_pa_deg=beam_pa_deg,
     ), "jy_per_beam"
+
+
+def _case_point_source_jy_per_pixel(xds: xr.Dataset) -> tuple[xr.Dataset, str]:
+    l = xds.coords["l"].values
+    m = xds.coords["m"].values
+    base = np.zeros((l.size, m.size), dtype=np.float64)
+    base[l.size // 2, m.size // 2] = 1.0
+    sky = _broadcast_to_sky(base, xds)
+    return _attach_sky_and_flag(xds, sky, units="Jy/pixel"), "jy_per_pixel"
 
 
 def _case_two_source_blend(xds: xr.Dataset) -> tuple[xr.Dataset, str]:
@@ -239,6 +285,7 @@ def main() -> None:
         nargs="+",
         default=[
             "point_source_center_jy_per_beam",
+            "point_source_center_jy_per_pixel",
             "two_source_blend_jy_per_beam",
             "extended_gaussian_jy_per_pixel",
             "flat_field_gradient_jy_per_pixel",
@@ -253,7 +300,8 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     builders = {
-        "point_source_center_jy_per_beam": _case_point_source,
+        "point_source_center_jy_per_beam": _case_point_source_jy_per_beam,
+        "point_source_center_jy_per_pixel": _case_point_source_jy_per_pixel,
         "two_source_blend_jy_per_beam": _case_two_source_blend,
         "extended_gaussian_jy_per_pixel": _case_extended_gaussian,
         "flat_field_gradient_jy_per_pixel": _case_flat_gradient,

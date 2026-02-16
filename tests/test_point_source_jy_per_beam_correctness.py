@@ -147,11 +147,9 @@ def test_point_source_fixture_sanity() -> None:
     assert "units" in beam["beam_params_label"].attrs, (
         "Expected beam_params_label coordinate to define angular units"
     )
-    # Source construction sets one unit-flux pixel at center.
-    assert float(np.nansum(sky)) == pytest.approx(1.0), (
-        f"Fixture total flux should be 1.0, got {float(np.nansum(sky)):.12g}"
-    )
-    assert float(np.nanmax(sky)) == pytest.approx(1.0), (
+    # Source construction uses a beam-shaped Gaussian with unit peak.
+    assert np.isfinite(sky).any(), "Fixture has no finite pixels"
+    assert float(np.nanmax(sky)) == pytest.approx(1.0, rel=1e-12, abs=1e-12), (
         f"Fixture peak should be 1.0, got {float(np.nanmax(sky)):.12g}"
     )
     max_loc = np.unravel_index(np.nanargmax(sky), sky.shape)
