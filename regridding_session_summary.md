@@ -222,3 +222,56 @@ Benchmarked regridding of XRADIO-generated `extended_gaussian_jy_per_pixel` imag
     * extended Gaussian Jy/pixel and Jy/beam tests
     * round-trip test migration/removal
 2. Local untracked directories (`xradio/`, `xradio_test_images/`) were intentionally left uncommitted.
+
+## Session Addendum 3: Beam Schema Correction + Point-Source Fixture Semantics
+
+**Timestamp:** 2026-02-16 02:36:49 UTC  
+**Facilitation Note:** The following additions/changes were implemented with Codex assistance.
+
+### 1) `regrid_2d.py` documentation and naming cleanup
+
+1. Updated module/function docstrings to describe true n-dimensional behavior instead of 3D-only wording.
+2. Clarified that parallelism is determined by Dask chunking/scheduler across dimensions other than `dim_a`/`dim_b`.
+3. Improved coordinate parameter descriptions (`new_coord_a/new_coord_b`) to explicitly define target output axis coordinates.
+4. Resolved naming ambiguity by using `xda` for `xarray.DataArray` variables while keeping `import dask.array as da` by convention.
+
+### 2) Beam metadata corrected to XRADIO schema representation
+
+1. Removed beam parameters from `SKY.attrs` in fixture generation paths.
+2. Added schema-compliant beam storage in fixtures:
+    * `BEAM_FIT_PARAMS` with dims `(time, frequency, polarization, beam_params_label)`
+    * `beam_params_label = ["major", "minor", "pa"]`
+    * `beam_params_label.attrs["units"]` populated (using `rad`)
+3. Updated correctness metadata parsing in `run_correctness_checks.py`:
+    * reads beam values from `BEAM_FIT_PARAMS` + `beam_params_label`
+    * supports unit conversion (`rad`, `deg`, `arcsec`) for major/minor/PA extraction
+    * keeps CLI beam overrides as highest priority
+4. Updated Jy/beam sanity checks to validate beam schema presence/shape/labels/units instead of legacy beam attrs.
+
+### 3) Point-source fixture semantics updated
+
+1. `point_source_center_jy_per_beam.zarr` changed from a delta pixel to a beam-shaped Gaussian in `SKY`, with beam definition in `BEAM_FIT_PARAMS`.
+2. Added/ensured `point_source_center_jy_per_pixel.zarr` as:
+    * a single-pixel delta peak (`sum=1`, `peak=1`)
+    * no beam metadata variable.
+3. Regenerated fixture outputs with overwrite after generator updates.
+
+### 4) Jy/pixel point-source tests adjusted for coarse-grid miss behavior
+
+1. Updated `tests/test_point_source_jy_per_pixel_correctness.py` expectations to explicitly handle known `n=40` coarse-grid behavior:
+    * linear nodal interpolation can miss single-pixel delta support
+    * integrated flux can collapse to ~0
+    * centroid can become undefined (`NaN`)
+2. Added in-line scientific rationale comments and explicit failure strings explaining this behavior.
+3. Kept stricter bounded checks for the `n=80` cases.
+
+### 5) Test execution outcomes (regrid test suite only)
+
+1. Full local `tests/` suite result after updates:
+    * `24 passed, 20 skipped`
+2. `xradio` upstream test tree was intentionally not part of this run requirement here.
+
+### 6) Commits pushed
+
+1. `722f254` - Use XRADIO beam schema (`beam_params_label`) for beam metadata handling.
+2. `93a88be` - Refine point-source fixtures and coarse-grid Jy/pixel test expectations.
