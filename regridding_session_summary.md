@@ -275,3 +275,21 @@ Benchmarked regridding of XRADIO-generated `extended_gaussian_jy_per_pixel` imag
 
 1. `722f254` - Use XRADIO beam schema (`beam_params_label`) for beam metadata handling.
 2. `93a88be` - Refine point-source fixtures and coarse-grid Jy/pixel test expectations.
+
+## Session Addendum 4: Two-Source Blend Attenuation Diagnostics
+
+**Timestamp:** 2026-02-16 00:00:00 UTC  
+**Facilitation Note:** The following notes were added with Codex assistance.
+
+### 1) Two-source blend peak attenuation explanation (Jy/beam)
+
+1. Fixture: `xradio_test_images/two_source_blend_jy_per_beam.zarr` (shape `128x128`).
+2. Pixel spacing: `dl ~= dm ~= 4.55e-05`.
+3. The two Gaussians are sub-pixel in width:
+    * Peak1: `sigma_l ~= 0.66 px`, `sigma_m ~= 0.36 px`
+    * Peak2: `sigma_l ~= 0.36 px`, `sigma_m ~= 0.66 px`
+4. Round-trip regrid with `xarray` + `linear` interpolation to `n_mid=40/80` and back attenuates peaks because the intermediate grid undersamples these sub-pixel Gaussians.
+5. Observed round-trip peak ratios:
+    * `n_mid=40`: `~0.431` for both peaks
+    * `n_mid=80`: `~0.557` for both peaks
+6. RMS residuals were small (`~0.0097` for `n_mid=40`, `~0.0055` for `n_mid=80`), indicating interpolation smoothing rather than a regridding bug.
